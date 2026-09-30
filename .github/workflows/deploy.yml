@@ -1,0 +1,71 @@
+name: PDF - 自动部署
+on:
+  push:
+    branches:
+      - main
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码仓库
+        uses: actions/checkout@v4
+
+      - name: 配置Node.js环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 配置pnpm包管理器
+        uses: pnpm/action-setup@v4
+
+      - name: 获取pnpm缓存路径
+        id: pnpm_store
+        shell: bash
+        run: echo "PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+      - name: 启用pnpm依赖缓存
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm_store.outputs.PATH }}
+          key: ${{ runner.os }}-pnpm-lock-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-lock-
+
+      - name: 安装依赖并构建项目
+        run: |
+          pnpm install --no-frozen-lockfile
+          pnpm approve-builds --all
+          pnpm run build
+
+      - name: 增量同步dist目录到服务器临时目录
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          echo -e "Host *\nStrictHostKeyChecking no\nUserKnownHostsFile /dev/null" > ~/.ssh/config
+          chmod 644 ~/.ssh/config
+
+          # 增量同步dist/到服务器 PDF_Tmp
+          rsync -vzr --info=progress2 --stats --timeout=600 --delete \
+            --no-times --no-perms --no-owner --no-group \
+            -e "ssh -p ${{ secrets.SERVER_PORT }}" ./dist/ root@${{ secrets.SERVER_HOST }}:/www/wwwroot/PDF_Tmp/ \
+            | stdbuf -oL tr '\r' '\n'
+
+      - name: 原子替换线上站点目录
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          echo -e "Host *\nStrictHostKeyChecking no\nUserKnownHostsFile /dev/null" > ~/.ssh/config
+          chmod 644 ~/.ssh/config
+
+          ssh -p ${{ secrets.SERVER_PORT }} root@${{ secrets.SERVER_HOST }} "
+            if [ -n \"\$(ls -A /www/wwwroot/PDF_Tmp 2>/dev/null)\" ]; then
+              rm -rf /www/wwwroot/PDF/*
+              cp -a /www/wwwroot/PDF_Tmp/* /www/wwwroot/PDF/
+              echo \"✅部署完成，新版已上线\"
+            else
+              echo \"❌PDF_Tmp为空，终止替换，保留旧站点\"
+              exit 1
+            fi
+          "
