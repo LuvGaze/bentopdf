@@ -34,10 +34,12 @@ jobs:
             ${{ runner.os }}-pnpm-lock-
 
       - name: 安装依赖并构建项目
+        shell: bash
         run: |
           pnpm install --no-frozen-lockfile
           pnpm approve-builds --all
           pnpm run build
+      
 
       - name: 增量同步dist目录到服务器临时目录
         run: |
